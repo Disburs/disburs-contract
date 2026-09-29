@@ -501,6 +501,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "disburs-factory"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "disburs-payroll"
 version = "0.1.0"
 dependencies = [
