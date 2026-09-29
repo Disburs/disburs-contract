@@ -1,11 +1,13 @@
 #![no_std]
 //! Disburs payroll contract.
 //!
-//! An employer (admin) funds a treasury held by this contract and pays workers
-//! a configured salary in a token (e.g. USDC) on Stellar. This is the basic
-//! building block; contract-aware runs, FX, and zero-knowledge privacy (salary
-//! commitments + on-chain proof verification, see the README roadmap) come
-//! later.
+//! One contract per client (deployed through the factory). An employer (admin)
+//! keeps a registry of workers and pays a whole run in one atomic call
+//! (`pay_batch`), either from funds parked in the contract or pulled from the
+//! employer's wallet in the same transaction. Every payment emits an event the
+//! backend reconciles against. Per-worker salaries and single `pay` remain for
+//! simple use. Conditional release (escrow) and zero-knowledge privacy come in
+//! later phases and build on this.
 
 mod errors;
 mod storage;
@@ -13,16 +15,32 @@ mod storage;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, contractmeta, symbol_short, token, Address, Env};
+use soroban_sdk::{
+    contract, contractimpl, contractmeta, contracttype, symbol_short, token, Address, BytesN, Env,
+    Vec,
+};
 
 use crate::errors::Error;
 
-contractmeta!(key = "version", val = "0.1.0");
+contractmeta!(key = "version", val = "0.2.0");
 contractmeta!(
     key = "description",
     val = "Disburs payroll: fund a treasury and pay workers in a token on Stellar."
 );
 contractmeta!(key = "license", val = "MIT");
+
+/// The most payments one `pay_batch` may carry. Stellar's per-transaction
+/// resource limits bound this well below the number; 100 keeps a batch
+/// comfortably inside them and matches the backend's chunk size.
+pub const MAX_BATCH: u32 = 100;
+
+/// One line of a run: who gets paid and how much (token smallest unit).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Payment {
+    pub worker: Address,
+    pub amount: i128,
+}
 
 #[contract]
 pub struct PayrollContract;
@@ -53,14 +71,121 @@ impl PayrollContract {
         Ok(())
     }
 
-    /// Admin-only: set (or update) a worker's salary.
+    /// Admin-only: set (or update) a worker's salary. Registers the worker.
     pub fn set_salary(env: Env, worker: Address, amount: i128) -> Result<(), Error> {
         storage::get_admin(&env)?.require_auth();
         if amount < 0 {
             return Err(Error::InvalidAmount);
         }
         storage::set_salary(&env, &worker, amount);
+        storage::add_worker(&env, &worker);
         Ok(())
+    }
+
+    /* ------------------------------ registry ------------------------------ */
+
+    /// Admin-only: add a worker to the registry. Returns true if newly added.
+    pub fn add_worker(env: Env, worker: Address) -> Result<bool, Error> {
+        storage::get_admin(&env)?.require_auth();
+        let added = storage::add_worker(&env, &worker);
+        if added {
+            env.events()
+                .publish((symbol_short!("worker"), symbol_short!("added")), worker);
+        }
+        Ok(added)
+    }
+
+    /// Admin-only: remove a worker and clear their salary. Returns true if
+    /// they were registered.
+    pub fn remove_worker(env: Env, worker: Address) -> Result<bool, Error> {
+        storage::get_admin(&env)?.require_auth();
+        storage::remove_salary(&env, &worker);
+        let removed = storage::remove_worker(&env, &worker);
+        if removed {
+            env.events()
+                .publish((symbol_short!("worker"), symbol_short!("removed")), worker);
+        }
+        Ok(removed)
+    }
+
+    /// Every registered worker, in registration order.
+    pub fn workers(env: Env) -> Vec<Address> {
+        storage::workers(&env)
+    }
+
+    /// Whether an address is a registered worker.
+    pub fn is_worker(env: Env, worker: Address) -> bool {
+        storage::is_worker(&env, &worker)
+    }
+
+    /* ------------------------------ batch pay ----------------------------- */
+
+    /// Admin-only: pay a whole run in one atomic call.
+    ///
+    /// `from` is where the money comes from. If it is this contract, the run
+    /// is paid from funds parked here by `deposit`. Otherwise `from` (the
+    /// employer's wallet) authorizes the call too and the run's total is
+    /// pulled in first, so nothing is parked between runs. Either way the
+    /// whole batch settles or none of it does. Each payment emits
+    /// `("pay", run_id, worker) amount`; the run emits `("run", run_id) total`.
+    /// `run_id` makes the call idempotent: paying the same run twice fails
+    /// with `RunAlreadyPaid`. Workers paid are added to the registry.
+    pub fn pay_batch(
+        env: Env,
+        from: Address,
+        run_id: BytesN<32>,
+        payments: Vec<Payment>,
+    ) -> Result<i128, Error> {
+        storage::get_admin(&env)?.require_auth();
+        if payments.is_empty() {
+            return Err(Error::EmptyBatch);
+        }
+        if payments.len() > MAX_BATCH {
+            return Err(Error::BatchTooLarge);
+        }
+        if storage::run_paid(&env, &run_id).is_some() {
+            return Err(Error::RunAlreadyPaid);
+        }
+
+        let mut total: i128 = 0;
+        for p in payments.iter() {
+            if p.amount <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            total = total.checked_add(p.amount).ok_or(Error::InvalidAmount)?;
+        }
+
+        let token = storage::get_token(&env)?;
+        let client = token::TokenClient::new(&env, &token);
+        let treasury = env.current_contract_address();
+
+        if from != treasury {
+            from.require_auth();
+            if client.balance(&from) < total {
+                return Err(Error::InsufficientTreasury);
+            }
+            client.transfer(&from, &treasury, &total);
+        }
+        if client.balance(&treasury) < total {
+            return Err(Error::InsufficientTreasury);
+        }
+
+        for p in payments.iter() {
+            client.transfer(&treasury, &p.worker, &p.amount);
+            storage::add_worker(&env, &p.worker);
+            env.events().publish(
+                (symbol_short!("pay"), run_id.clone(), p.worker.clone()),
+                p.amount,
+            );
+        }
+        storage::set_run_paid(&env, &run_id, total);
+        env.events().publish((symbol_short!("run"), run_id), total);
+        Ok(total)
+    }
+
+    /// The total a run id moved, if it has been paid.
+    pub fn run_paid(env: Env, run_id: BytesN<32>) -> Option<i128> {
+        storage::run_paid(&env, &run_id)
     }
 
     /// Admin-only: pay a worker their configured salary from the treasury.
@@ -95,7 +220,8 @@ impl PayrollContract {
             return Err(Error::InsufficientTreasury);
         }
         client.transfer(&treasury, &to, &amount);
-        env.events().publish((symbol_short!("withdraw"), to), amount);
+        env.events()
+            .publish((symbol_short!("withdraw"), to), amount);
         Ok(())
     }
 

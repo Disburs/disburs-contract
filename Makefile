@@ -3,7 +3,11 @@ default: build
 build:
 	stellar contract build
 
-test:
+# The factory's tests deploy the real payroll wasm, so build it first.
+wasm-payroll:
+	cargo build -p disburs-payroll --target wasm32v1-none --release
+
+test: wasm-payroll
 	cargo test
 
 fmt:
@@ -19,7 +23,8 @@ clean:
 ci:
 	cargo fmt --all --check
 	cargo clippy --locked --all-targets -- -D warnings
+	cargo build --locked -p disburs-payroll --target wasm32v1-none --release
 	cargo test --locked --all-targets
 	stellar contract build
 
-.PHONY: default build test fmt clippy clean ci
+.PHONY: default build wasm-payroll test fmt clippy clean ci

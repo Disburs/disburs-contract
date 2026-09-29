@@ -14,4 +14,10 @@ pub enum Error {
     NoSalarySet = 3,
     /// The treasury does not hold enough tokens to cover the payout.
     InsufficientTreasury = 4,
+    /// A batch carries more payments than one transaction may hold.
+    BatchTooLarge = 5,
+    /// A batch must contain at least one payment.
+    EmptyBatch = 6,
+    /// This run id was already paid; a retry must not pay twice.
+    RunAlreadyPaid = 7,
 }
