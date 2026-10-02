@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Env, String, Vec};
 
 use crate::errors::Error;
 
@@ -17,6 +17,26 @@ pub enum DataKey {
     /// A run id that has been paid, with the total it moved. Makes
     /// `pay_batch` idempotent: a retry of the same run pays nothing.
     RunPaid(BytesN<32>),
+    /// The code version this contract runs (set at deploy, bumped by `upgrade`).
+    Version,
+    /// The version whose post-upgrade `migrate` has already run.
+    MigratedTo,
+}
+
+pub fn set_version(env: &Env, version: &String) {
+    env.storage().instance().set(&DataKey::Version, version);
+}
+
+pub fn get_version(env: &Env) -> Option<String> {
+    env.storage().instance().get(&DataKey::Version)
+}
+
+pub fn set_migrated_to(env: &Env, version: &String) {
+    env.storage().instance().set(&DataKey::MigratedTo, version);
+}
+
+pub fn get_migrated_to(env: &Env) -> Option<String> {
+    env.storage().instance().get(&DataKey::MigratedTo)
 }
 
 pub fn set_admin(env: &Env, admin: &Address) {

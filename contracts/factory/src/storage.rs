@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, Env};
+use soroban_sdk::{contracttype, Address, BytesN, Env, String};
 
 use crate::errors::Error;
 
@@ -13,6 +13,26 @@ pub enum DataKey {
     DeployedCount,
     /// The i-th deployed client contract address.
     Deployed(u32),
+    /// The code version this factory runs (set at deploy, bumped by `upgrade`).
+    Version,
+    /// The version whose post-upgrade `migrate` has already run.
+    MigratedTo,
+}
+
+pub fn set_version(env: &Env, version: &String) {
+    env.storage().instance().set(&DataKey::Version, version);
+}
+
+pub fn get_version(env: &Env) -> Option<String> {
+    env.storage().instance().get(&DataKey::Version)
+}
+
+pub fn set_migrated_to(env: &Env, version: &String) {
+    env.storage().instance().set(&DataKey::MigratedTo, version);
+}
+
+pub fn get_migrated_to(env: &Env) -> Option<String> {
+    env.storage().instance().get(&DataKey::MigratedTo)
 }
 
 pub fn set_owner(env: &Env, owner: &Address) {

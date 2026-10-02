@@ -2,3 +2,6 @@
 **/*.rs.bk
 .DS_Store
 test_snapshots/
+
+# Stellar CLI writes identities (secret keys!) here when run inside the repo.
+.config/

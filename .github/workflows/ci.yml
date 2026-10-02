@@ -49,7 +49,7 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       # The factory's tests deploy the real payroll wasm, so build it first.
-      - run: cargo build --locked -p disburs-payroll --target wasm32v1-none --release
+      - run: cargo build --locked -p disburs-payroll -p disburs-factory --target wasm32v1-none --release
       # --locked fails if Cargo.lock is stale, which keeps the committed lock
       # file (deliberately pinned, see CONTEXT.md) honest.
       - run: cargo test --locked --all-targets

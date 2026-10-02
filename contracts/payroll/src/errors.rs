@@ -20,4 +20,8 @@ pub enum Error {
     EmptyBatch = 6,
     /// This run id was already paid; a retry must not pay twice.
     RunAlreadyPaid = 7,
+    /// `upgrade` needs a non-empty version label.
+    InvalidVersion = 8,
+    /// `migrate` already ran for the current version.
+    AlreadyMigrated = 9,
 }

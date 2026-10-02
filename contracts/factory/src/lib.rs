@@ -13,12 +13,19 @@ mod storage;
 
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_upgrade;
 
-use soroban_sdk::{contract, contractimpl, contractmeta, symbol_short, Address, BytesN, Env};
+use soroban_sdk::{
+    contract, contractimpl, contractmeta, symbol_short, Address, BytesN, Env, String,
+};
 
 use crate::errors::Error;
 
-contractmeta!(key = "version", val = "0.1.0");
+/// The code version. Bump it with every release.
+pub const VERSION: &str = "0.2.0";
+
+contractmeta!(key = "version", val = "0.2.0");
 contractmeta!(
     key = "description",
     val = "Disburs factory: deploy one payroll contract per client."
@@ -35,6 +42,7 @@ impl FactoryContract {
     pub fn __constructor(env: Env, owner: Address, payroll_wasm_hash: BytesN<32>) {
         storage::set_owner(&env, &owner);
         storage::set_wasm_hash(&env, &payroll_wasm_hash);
+        storage::set_version(&env, &String::from_str(&env, VERSION));
     }
 
     /// Owner-only: deploy a payroll contract for a client. `salt` makes the
@@ -91,5 +99,44 @@ impl FactoryContract {
     /// The i-th deployed client contract (0-based), if any.
     pub fn deployed_at(env: Env, index: u32) -> Option<Address> {
         storage::deployed_at(&env, index)
+    }
+
+    /* ------------------------------- upgrade ------------------------------ */
+
+    /// The code version this factory runs. Factories deployed before
+    /// versions were recorded report "0.1.0".
+    pub fn version(env: Env) -> String {
+        storage::get_version(&env).unwrap_or_else(|| String::from_str(&env, "0.1.0"))
+    }
+
+    /// Owner-only: replace the factory's code in place, keeping the owner,
+    /// the payroll wasm hash and the deployment record. Emits
+    /// `("upgraded", version) wasm_hash`.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: String) -> Result<(), Error> {
+        storage::get_owner(&env)?.require_auth();
+        if new_version.is_empty() {
+            return Err(Error::InvalidVersion);
+        }
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        storage::set_version(&env, &new_version);
+        env.events()
+            .publish((symbol_short!("upgraded"), new_version), new_wasm_hash);
+        Ok(())
+    }
+
+    /// Owner-only, once per version: post-upgrade data changes. Emits
+    /// `("migrated", version)`.
+    pub fn migrate(env: Env) -> Result<(), Error> {
+        storage::get_owner(&env)?.require_auth();
+        let current = Self::version(env.clone());
+        if storage::get_migrated_to(&env).as_ref() == Some(&current) {
+            return Err(Error::AlreadyMigrated);
+        }
+        // Per-version data migrations go here, keyed on `current`. None so far.
+        storage::set_migrated_to(&env, &current);
+        env.events()
+            .publish((symbol_short!("migrated"), current), ());
+        Ok(())
     }
 }
