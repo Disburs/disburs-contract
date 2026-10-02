@@ -38,6 +38,8 @@ jobs:
       - name: Install toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # The upgrade tests import the built wasm files, so build them first.
+      - run: cargo build --locked -p disburs-payroll -p disburs-factory --target wasm32v1-none --release
       - run: cargo clippy --locked --all-targets -- -D warnings
 
   test:
@@ -48,7 +50,7 @@ jobs:
       - name: Install toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      # The factory's tests deploy the real payroll wasm, so build it first.
+      # The tests deploy and upgrade the real wasm files, so build them first.
       - run: cargo build --locked -p disburs-payroll -p disburs-factory --target wasm32v1-none --release
       # --locked fails if Cargo.lock is stale, which keeps the committed lock
       # file (deliberately pinned, see CONTEXT.md) honest.
