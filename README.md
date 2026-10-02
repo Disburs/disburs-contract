@@ -74,6 +74,9 @@ contract.
 | `deploy(salt, admin, token)` | owner | Deploys a payroll contract for a client (deterministic address per salt) and records it. Returns its address. |
 | `set_wasm_hash(hash)` | owner | Deploy from a newer payroll wasm from now on; existing client contracts are untouched. |
 | `wasm_hash()` / `owner()` / `set_owner(new)` | anyone / anyone / owner | Read the wasm hash, read or transfer ownership. |
+| `version()` | anyone | The code version this factory runs. |
+| `upgrade(new_wasm_hash, new_version)` | owner | Replaces the factory's code in place; owner, wasm hash and the deployment record stay. Emits `upgraded`. |
+| `migrate()` | owner | Post-upgrade data changes, once per version (`AlreadyMigrated` on a repeat). |
 | `deployed_count()` / `deployed_at(i)` | anyone | Enumerate every client contract deployed. |
 
 ### Payroll
@@ -97,6 +100,9 @@ which run ids have been paid.
 | `salary_of(worker)` | anyone | A worker's configured salary (0 if unset). |
 | `get_admin()` | anyone | The current admin. |
 | `set_admin(new_admin)` | admin | Transfers admin rights to a new address. |
+| `version()` | anyone | The code version this contract runs (`0.2.0` for contracts deployed before versions were recorded). |
+| `upgrade(new_wasm_hash, new_version)` | admin | Replaces the contract's code in place; balances, workers, salaries and paid runs stay. Emits `upgraded`. |
+| `migrate()` | admin | Post-upgrade data changes, once per version (`AlreadyMigrated` on a repeat). |
 
 Money moves through the SEP-41 token interface, so any compliant token works; in
 production that's the USDC Stellar Asset Contract. Every state-changing call
@@ -111,6 +117,32 @@ treasury wallet as both admin and `from`, built on the wallet's own account and
 fee-bumped by the sponsor, so wallets never need XLM.
 
 ---
+
+## Upgrades
+
+Both contracts upgrade **in place**: `upgrade(new_wasm_hash, new_version)`
+swaps the code behind the same address and keeps all storage, so a bug fix or a
+new feature reaches every client contract without moving treasuries. The
+payroll contract's admin is the organization's treasury key, which the backend
+holds, so the backend rolls an upgrade out to every organization; the
+factory's owner is the Disburs operations key.
+
+Rules for a release:
+
+1. Bump `VERSION` (and `contractmeta!`) in the contract and the crate version.
+2. Keep storage compatible: never change the meaning or encoding of an
+   existing `DataKey`; add new keys instead. Data changes go in `migrate`,
+   keyed on the version.
+3. Copy the previous release's wasm into `contracts/<name>/fixtures/` and point
+   `test_upgrade.rs` at it. The test upgrades that build to the current one
+   and checks every record survives.
+4. Upload the new wasm, call `upgrade` on each contract, then `migrate` once.
+   On the factory, also `set_wasm_hash` so new clients start on the new code.
+
+Contracts deployed before `0.3.0` (payroll) / `0.2.0` (factory) have no
+`upgrade` entry point and must be redeployed. The upgrade right is as powerful
+as the admin key; a timelock and a multi-signature owner are planned before
+mainnet.
 
 ## Deploying to testnet
 

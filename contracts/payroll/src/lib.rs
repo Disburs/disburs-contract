@@ -14,15 +14,21 @@ mod storage;
 
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_upgrade;
 
 use soroban_sdk::{
     contract, contractimpl, contractmeta, contracttype, symbol_short, token, Address, BytesN, Env,
-    Vec,
+    String, Vec,
 };
 
 use crate::errors::Error;
 
-contractmeta!(key = "version", val = "0.2.0");
+/// The code version. Bump it with every release; `upgrade` records the new
+/// label on chain so the backend can see which version each client runs.
+pub const VERSION: &str = "0.3.0";
+
+contractmeta!(key = "version", val = "0.3.0");
 contractmeta!(
     key = "description",
     val = "Disburs payroll: fund a treasury and pay workers in a token on Stellar."
@@ -51,6 +57,7 @@ impl PayrollContract {
     pub fn __constructor(env: Env, admin: Address, token: Address) {
         storage::set_admin(&env, &admin);
         storage::set_token(&env, &token);
+        storage::set_version(&env, &String::from_str(&env, VERSION));
     }
 
     /// Fund the treasury: transfer `amount` of the token from `from` into the
@@ -245,6 +252,49 @@ impl PayrollContract {
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         storage::get_admin(&env)?.require_auth();
         storage::set_admin(&env, &new_admin);
+        Ok(())
+    }
+
+    /* ------------------------------- upgrade ------------------------------ */
+
+    /// The code version this contract runs. Contracts deployed before
+    /// versions were recorded report "0.2.0".
+    pub fn version(env: Env) -> String {
+        storage::get_version(&env).unwrap_or_else(|| String::from_str(&env, "0.2.0"))
+    }
+
+    /// Admin-only: replace this contract's code in place with an uploaded
+    /// wasm, keeping every balance, worker, salary and paid run. The new
+    /// code takes effect from the next invocation. `new_version` is the
+    /// label the upgraded contract reports; it is written here so the new
+    /// code finds it. Emits `("upgraded", version) wasm_hash`.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>, new_version: String) -> Result<(), Error> {
+        storage::get_admin(&env)?.require_auth();
+        if new_version.is_empty() {
+            return Err(Error::InvalidVersion);
+        }
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        storage::set_version(&env, &new_version);
+        env.events()
+            .publish((symbol_short!("upgraded"), new_version), new_wasm_hash);
+        Ok(())
+    }
+
+    /// Admin-only, once per version: run the data changes a new version
+    /// needs after `upgrade`. A version with nothing to migrate still records
+    /// that it ran, so a second call fails with `AlreadyMigrated`. Emits
+    /// `("migrated", version)`.
+    pub fn migrate(env: Env) -> Result<(), Error> {
+        storage::get_admin(&env)?.require_auth();
+        let current = Self::version(env.clone());
+        if storage::get_migrated_to(&env).as_ref() == Some(&current) {
+            return Err(Error::AlreadyMigrated);
+        }
+        // Per-version data migrations go here, keyed on `current`. None so far.
+        storage::set_migrated_to(&env, &current);
+        env.events()
+            .publish((symbol_short!("migrated"), current), ());
         Ok(())
     }
 }
