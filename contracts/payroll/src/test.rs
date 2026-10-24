@@ -293,7 +293,7 @@ fn registry_add_remove_and_enumerate() {
 /* ------------------------------ batch pay ----------------------------- */
 
 use crate::Payment;
-use soroban_sdk::{vec, BytesN, Vec};
+use soroban_sdk::{vec, BytesN};
 
 fn run_id(env: &Env, n: u8) -> BytesN<32> {
     BytesN::from_array(env, &[n; 32])
