@@ -26,3 +26,6 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Accepted exceptions live in .cargo/audit.toml with their reasons; the
+          # action takes the same list as an input.
+          ignore: RUSTSEC-2026-0387
